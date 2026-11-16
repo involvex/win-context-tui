@@ -69,11 +69,22 @@ describe("strict backing entry names", () => {
     { description: "a dot-dot path segment", name: ".." },
     { description: "a forward-slash separator", name: "folder/child" },
     { description: "a backslash separator", name: "folder\\child" },
-    { description: "a drive-style colon", name: "C:child" },
-    { description: "a wildcard character", name: "Open*" },
     { description: "a control character", name: "Open\u0000Name" },
   ])("rejects $description", ({ name }) => {
     expect(() => backingShellKeyForTarget("file", "machine", name)).toThrow();
+  });
+
+  test.each([
+    "Open*",
+    "Open?",
+    "C:child",
+    'Say "Hi"',
+    "Open <Now>",
+    "Pipe|Entry",
+  ])("keeps printable registry child name %p addressable", (name) => {
+    expect(backingShellKeyForTarget("file", "machine", name)).toBe(
+      `HKLM\\Software\\Classes\\*\\shell\\${name}`,
+    );
   });
 
   test("preserves surrounding whitespace in a valid child name", () => {

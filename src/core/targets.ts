@@ -59,7 +59,7 @@ export function shellRootForTarget(
   }
 }
 
-const UNSAFE_BACKING_ENTRY_NAME = /[<>:"/\\|?*]/;
+const PATH_SEPARATOR = /[\\/]/;
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
@@ -76,8 +76,10 @@ function validateBackingEntryName(name: string): string {
   if (trimmed === "." || trimmed === "..") {
     throw new Error("Shell entry name must not be a path segment");
   }
-  if (UNSAFE_BACKING_ENTRY_NAME.test(name) || hasControlCharacter(name)) {
-    throw new Error("Shell entry name contains unsafe path characters");
+  if (PATH_SEPARATOR.test(name) || hasControlCharacter(name)) {
+    throw new Error(
+      "Shell entry name contains a path separator or control character",
+    );
   }
   return name;
 }
