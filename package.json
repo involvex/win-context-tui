@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun --watch src/index.tsx",
     "start": "bun src/index.tsx",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier . --write",
