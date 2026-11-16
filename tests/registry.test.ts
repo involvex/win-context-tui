@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -6,7 +6,11 @@ import {
   removeContextEntry,
   type RemoveContextEntryOptions,
 } from "../src/core/registry.ts";
-import { createBackup, withBackup } from "../src/core/backup.ts";
+import {
+  BackupMutationError,
+  createBackup,
+  withBackup,
+} from "../src/core/backup.ts";
 import type { RegResult } from "../src/core/spawn.ts";
 
 type RegistryCommandRunner = (args: string[]) => Promise<RegResult>;
@@ -190,15 +194,9 @@ describe("backup artifacts", () => {
     };
     const backupRoot = await createTemporaryRoot();
 
-    setSystemTime(new Date("2026-11-16T12:00:00.000Z"));
-    let backups: Awaited<ReturnType<typeof createBackup>>[];
-    try {
-      backups = await Promise.all(
-        keys.map((key) => createBackup(key, { runner, backupRoot })),
-      );
-    } finally {
-      setSystemTime();
-    }
+    const backups = await Promise.all(
+      keys.map((key) => createBackup(key, { runner, backupRoot })),
+    );
     const [first, second] = backups;
 
     expect(first?.backupDir).not.toBe(second?.backupDir);
@@ -207,6 +205,14 @@ describe("backup artifacts", () => {
     expect(await readFile(second?.meta.regFile as string, "utf8")).toBe(
       keys[1],
     );
+    const firstMeta = JSON.parse(
+      await readFile(join(first?.backupDir as string, "meta.json"), "utf8"),
+    ) as { key: string; existed: boolean };
+    const secondMeta = JSON.parse(
+      await readFile(join(second?.backupDir as string, "meta.json"), "utf8"),
+    ) as { key: string; existed: boolean };
+    expect(firstMeta).toMatchObject({ key: keys[0], existed: true });
+    expect(secondMeta).toMatchObject({ key: keys[1], existed: true });
   });
 });
 
@@ -291,6 +297,74 @@ describe("removeContextEntry scoped deletion", () => {
     expect(outcome.backupDir.startsWith(backupRoot)).toBe(true);
     expect(outcome.meta).toMatchObject({ key: expectedKey, existed: true });
     expect(outcome.meta.regFile?.startsWith(backupRoot)).toBe(true);
+  });
+
+  test("preserves backup metadata when the delete runner rejects after export", async () => {
+    const calls: string[][] = [];
+    const runner: RegistryCommandRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === "export") {
+        await writeFile(
+          args[2] as string,
+          "Windows Registry Editor Version 5.00",
+        );
+        return { ok: true, code: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "delete") {
+        throw new Error("delete runner rejected");
+      }
+      return { ok: true, code: 0, stdout: "", stderr: "" };
+    };
+    const backupRoot = await createTemporaryRoot();
+    const expectedKey = "HKCU\\Software\\Classes\\*\\shell\\Rejecting Entry";
+
+    let caught: unknown;
+    try {
+      await removeContextEntry(
+        { target: "file", scope: "user", name: "Rejecting Entry" },
+        { runner, backupRoot },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(calls.map((args) => args[0])).toEqual(["query", "export", "delete"]);
+    expect(caught).toBeInstanceOf(BackupMutationError);
+    const error = caught as BackupMutationError;
+    expect(error.backupDir.startsWith(backupRoot)).toBe(true);
+    expect(error.meta).toMatchObject({
+      key: expectedKey,
+      existed: true,
+    });
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).message).toBe("delete runner rejected");
+    const onDiskMeta = JSON.parse(
+      await readFile(join(error.backupDir, "meta.json"), "utf8"),
+    ) as { key: string };
+    expect(onDiskMeta.key).toBe(expectedKey);
+  });
+
+  test("does not attach backup metadata when the required query fails", async () => {
+    const runner: RegistryCommandRunner = async () => ({
+      ok: false,
+      code: 1,
+      stdout: "",
+      stderr: "key missing",
+    });
+
+    let caught: unknown;
+    try {
+      await removeContextEntry(
+        { target: "file", scope: "user", name: "Missing Entry" },
+        { runner, backupRoot: await createTemporaryRoot() },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).not.toBeInstanceOf(BackupMutationError);
+    expect(caught).toBeInstanceOf(Error);
+    expect("backupDir" in (caught as object)).toBe(false);
   });
 
   test("returns delete process details without treating them as success", async () => {

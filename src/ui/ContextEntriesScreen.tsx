@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
 import { useEffect, useState } from "react";
+import { BackupMutationError } from "../core/backup.ts";
 import {
   listContextEntries,
   type ContextEntry,
@@ -13,6 +14,7 @@ import {
   type RegistryScope,
 } from "../core/targets.ts";
 import { Status } from "./Status.tsx";
+import { sanitizeTerminalText } from "./sanitize.ts";
 import { theme } from "./theme.ts";
 
 export type ContextEntriesPhase =
@@ -114,12 +116,41 @@ type ContextEntriesScreenProps = {
   onBack: () => void;
 };
 
-type Outcome = {
+export type ContextEntriesOutcome = {
   ok: boolean;
   message: string;
   backupDir?: string;
   detail?: string;
 };
+
+type Outcome = ContextEntriesOutcome;
+
+/** Convert a removal exception into a result that retains successful backups. */
+export function contextEntriesRemovalFailureOutcome(
+  error: unknown,
+  entry: Pick<ContextEntry, "label">,
+): Outcome {
+  const safeLabel = sanitizeTerminalText(entry.label);
+  if (error instanceof BackupMutationError) {
+    const cause = error.cause;
+    return {
+      ok: false,
+      message: `Failed to remove "${safeLabel}"`,
+      detail: sanitizeTerminalText(
+        cause instanceof Error ? cause.message : String(cause),
+      ),
+      backupDir: error.backupDir,
+    };
+  }
+
+  return {
+    ok: false,
+    message: `Failed to back up or remove "${safeLabel}"`,
+    detail: sanitizeTerminalText(
+      error instanceof Error ? error.message : String(error),
+    ),
+  };
+}
 
 export type RemovalElevationDecision = {
   allowed: boolean;
@@ -131,14 +162,30 @@ export function formatScopeLabel(scope: RegistryScope): string {
   return scope === "user" ? "User" : "Machine";
 }
 
-/** Show a command when present, otherwise identify the registry handler. */
+/** Show every available handler value without collapsing combined handlers. */
+export function formatHandlerDetails(
+  entry: Pick<ContextEntry, "command" | "delegateExecute" | "handlerKind">,
+): string[] {
+  const details: string[] = [];
+  if (entry.command) {
+    details.push(`Command: ${sanitizeTerminalText(entry.command)}`);
+  }
+  if (entry.delegateExecute) {
+    details.push(
+      `DelegateExecute: ${sanitizeTerminalText(entry.delegateExecute)}`,
+    );
+  }
+  if (details.length === 0) {
+    details.push(`Handler: ${entry.handlerKind}`);
+  }
+  return details;
+}
+
+/** Backwards-compatible single-string view of the handler details. */
 export function formatCommandOrHandler(
-  entry: Pick<ContextEntry, "command" | "handlerKind">,
+  entry: Pick<ContextEntry, "command" | "delegateExecute" | "handlerKind">,
 ): string {
-  const command = entry.command?.trim();
-  return command
-    ? `Command: ${entry.command}`
-    : `Handler: ${entry.handlerKind}`;
+  return formatHandlerDetails(entry).join("\n");
 }
 
 export function contextEntrySelectItems(
@@ -204,7 +251,9 @@ export function ContextEntriesScreen({
         setOutcome({
           ok: false,
           message: "Failed to list context-menu entries",
-          detail: error instanceof Error ? error.message : String(error),
+          detail: sanitizeTerminalText(
+            error instanceof Error ? error.message : String(error),
+          ),
         });
         setPhase("result");
       });
@@ -237,25 +286,24 @@ export function ContextEntriesScreen({
         scope: selected.scope,
         name: selected.name,
       });
+      const safeLabel = sanitizeTerminalText(selected.label);
       setOutcome({
         ok: result.ok,
         message: result.ok
-          ? `Removed "${selected.label}" (${formatScopeLabel(selected.scope)})`
-          : `Failed to remove "${selected.label}"`,
+          ? `Removed "${safeLabel}" (${formatScopeLabel(selected.scope)})`
+          : `Failed to remove "${safeLabel}"`,
         backupDir,
         detail: result.ok
           ? undefined
-          : [`exit code ${result.code}`, result.stderr, result.stdout]
-              .filter((value) => value.trim().length > 0)
-              .join("\n"),
+          : sanitizeTerminalText(
+              [`exit code ${result.code}`, result.stderr, result.stdout]
+                .filter((value) => value.trim().length > 0)
+                .join("\n"),
+            ),
       });
       setPhase("result");
     } catch (error) {
-      setOutcome({
-        ok: false,
-        message: `Failed to back up or remove "${selected.label}"`,
-        detail: error instanceof Error ? error.message : String(error),
-      });
+      setOutcome(contextEntriesRemovalFailureOutcome(error, selected));
       setPhase("result");
     } finally {
       setBusy(false);
@@ -313,14 +361,32 @@ export function ContextEntriesScreen({
         <Text color={theme.text} bold>
           Remove this context-menu entry?
         </Text>
-        <Text color={theme.muted}>Label: {selected.label}</Text>
-        <Text color={theme.muted}>Name: {selected.name}</Text>
+        <Text color={theme.muted}>
+          Label: {formatEntryDisplayLabel(selected)}
+        </Text>
+        <Text color={theme.muted}>
+          Label source: {selected.labelData.source}
+        </Text>
+        {formatEntryMetadataDetails(selected).map((detail) => (
+          <Text key={detail} color={theme.muted}>
+            {detail}
+          </Text>
+        ))}
+        <Text color={theme.muted}>
+          Name: {sanitizeTerminalText(selected.name)}
+        </Text>
         <Text color={theme.muted}>
           Scope: {formatScopeLabel(selected.scope)} ({scopeHive})
         </Text>
-        <Text color={theme.muted}>Registry path: {selected.registryPath}</Text>
+        <Text color={theme.muted}>
+          Registry path: {sanitizeTerminalText(selected.registryPath)}
+        </Text>
         <Text color={theme.muted}>Handler kind: {selected.handlerKind}</Text>
-        <Text color={theme.muted}>{formatCommandOrHandler(selected)}</Text>
+        {formatHandlerDetails(selected).map((detail) => (
+          <Text key={detail} color={theme.muted}>
+            {detail}
+          </Text>
+        ))}
         {!elevation.allowed ? (
           <Text color={theme.warn}>{elevation.message}</Text>
         ) : null}
@@ -339,17 +405,17 @@ export function ContextEntriesScreen({
       <Box flexDirection="column">
         <Header target={target} />
         <Text color={theme.text}>
-          {listView.entries.length === 0
+          {listView.isEmpty
             ? "No context-menu entries found for this target."
             : `Found ${listView.entries.length} context-menu entr${listView.entries.length === 1 ? "y" : "ies"}.`}
         </Text>
         {listView.warnings.map((warning) => (
           <Text key={warning.scope} color={theme.warn}>
             Warning: {formatScopeLabel(warning.scope)} scope unavailable:{" "}
-            {warning.message}
+            {sanitizeTerminalText(warning.message)}
           </Text>
         ))}
-        {listView.entries.length > 0 ? (
+        {!listView.isEmpty ? (
           <Box marginTop={1}>
             <SelectInput
               items={contextEntrySelectItems(listView.entries)}
@@ -365,7 +431,7 @@ export function ContextEntriesScreen({
           </Box>
         ) : null}
         <Text color={theme.muted}>
-          {listView.entries.length > 0
+          {!listView.isEmpty
             ? "Up/Down navigate - Enter select - Esc back"
             : "Esc back"}
         </Text>
@@ -413,16 +479,55 @@ export function ContextEntriesScreen({
   );
 }
 
-function formatEntryListLabel(entry: ContextEntry): string {
+/** Mark indirect MUIVerb values so they are not mistaken for resolved labels. */
+export function formatEntryDisplayLabel(entry: ContextEntry): string {
+  const label = sanitizeTerminalText(entry.label);
+  return entry.labelData.isResourceReference
+    ? `${label} (unresolved MUIVerb resource reference)`
+    : label;
+}
+
+/** Show the raw label metadata in a safe, explicit form. */
+export function formatEntryMetadataDetails(entry: ContextEntry): string[] {
+  const details: string[] = [];
+  if (entry.labelData.defaultValue) {
+    details.push(
+      `Default label: ${sanitizeTerminalText(entry.labelData.defaultValue)}`,
+    );
+  }
+  if (entry.labelData.muiVerb) {
+    details.push(
+      `MUIVerb: ${sanitizeTerminalText(entry.labelData.muiVerb)}${
+        entry.labelData.isResourceReference
+          ? " (resource reference; unresolved)"
+          : ""
+      }`,
+    );
+  }
+  return details;
+}
+
+function formatHandlerSummary(entry: ContextEntry): string {
+  if (entry.command && entry.delegateExecute) {
+    return "command + delegate";
+  }
+  if (entry.command) {
+    return "command";
+  }
+  if (entry.delegateExecute) {
+    return "delegate";
+  }
+  return "metadata";
+}
+
+export function formatEntryListLabel(entry: ContextEntry): string {
+  const displayLabel = formatEntryDisplayLabel(entry);
+  const displayName = sanitizeTerminalText(entry.name);
   const identity =
-    entry.label === entry.name ? entry.name : `${entry.label} (${entry.name})`;
-  const handler =
-    entry.handlerKind === "command"
-      ? entry.command
-        ? "command"
-        : "command (details unavailable)"
-      : `${entry.handlerKind} handler`;
-  return `[${formatScopeLabel(entry.scope)}] ${identity} - ${handler}`;
+    displayLabel === displayName
+      ? displayName
+      : `${displayLabel} (${displayName})`;
+  return `[${formatScopeLabel(entry.scope)}] ${identity} - ${formatHandlerSummary(entry)}`;
 }
 
 function Header({ target }: { target: ContextTarget | null }) {

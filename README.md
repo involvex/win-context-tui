@@ -56,19 +56,22 @@ win-context-tui
 1. Select **Manage context-menu entries (list / remove)** from the home menu.
 2. Choose the Explorer target: selected file, selected folder, or folder
    background.
-3. Review the list. Each row shows its scope, label and registry name, and
-   handler kind. Warnings identify a scope that could not be read.
-4. Select an entry and review the label, name, scope, exact backing-hive path,
-   and command or handler kind.
+3. Review the list. Each row shows its scope, label and registry name, and all
+   available handler kinds. Indirect `MUIVerb` resource references are marked
+   as unresolved. Warnings identify a scope that could not be read.
+4. Select an entry and review the label source, default/`MUIVerb` metadata,
+   name, scope, exact backing-hive path, command, `DelegateExecute`, and
+   handler kind.
 5. Press **Enter** to confirm, or **n** / **Esc** to cancel.
 6. The result shows whether removal succeeded, the backup directory, and
    detailed process output when it failed.
 
 Listing is read-only. A removal exports the selected child key before deleting
-it, then deletes only that child in the selected scope. A missing key or failed
-backup stops the removal. After a successful backup, the result includes the
-backup directory even when deletion subsequently fails. If backup creation
-itself fails, there is no backup directory to show.
+it, then deletes only that child in the selected scope. Command and
+`DelegateExecute` values are read from the standard verb `command` subkey. A
+missing key or failed backup stops the removal. After a successful backup, the
+result includes the backup directory even when deletion subsequently fails or
+rejects. If backup creation itself fails, there is no backup directory to show.
 
 ### User and machine scope
 
@@ -160,7 +163,8 @@ Add flows back up their primary target key: `HKCR\.ext` for ShellNew and
 by an add flow are not separately exported.
 
 The TUI shows the backup directory after a successful backup, including when
-the later write or deletion fails. A backup failure itself has no directory.
+the later write or deletion returns failure or rejects. A backup failure
+itself has no directory.
 
 Use an elevated shell to restore a machine-scoped key. The TUI does not
 provide an automatic restore action.

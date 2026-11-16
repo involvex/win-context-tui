@@ -67,6 +67,7 @@ src/
     Status.tsx                # Shared result display
     ShellNewScreen.tsx        # Add a ShellNew extension
     ContextCmdScreen.tsx      # Add a context command
+    sanitize.ts               # Terminal-control sanitizer for rendered registry text
     theme.ts                  # Dark/hacker color theme
   core/
     contextEntries.ts  # Scope-aware enumeration, parsing, and merge
@@ -77,6 +78,12 @@ src/
     targets.ts         # Target and backing-scope registry paths
     paths.ts           # Path and registry-key helpers
     presets.ts         # Common application presets
+tests/
+  contextEntries.test.ts       # Enumeration, parsing, merge, and scope regressions
+  contextEntriesScreen.test.ts  # Management-screen formatting and behavior
+  registry.test.ts              # Backup and exact-child removal regressions
+  sanitize.test.ts              # Terminal-control sanitization regressions
+  targets.test.ts               # Target and backing-scope path regressions
 ```
 
 ## Best Practices
@@ -94,13 +101,19 @@ src/
   Restore an existing-key backup with `reg import`; roll back a missing-key
   backup by deleting the key recorded in `STUB.txt` and `meta.json`.
 - **Backup results:** Return the backup directory after a successful backup,
-  including when the later deletion fails. A backup failure itself has no
-  directory.
+  including when the later mutation returns failure or rejects with
+  `BackupMutationError`. A backup/query/export failure before a successful
+  backup has no directory.
+
+- **Render-boundary sanitization:** Pass registry-derived labels, names, paths,
+  commands, delegate values, and metadata through `ui/sanitize.ts` before
+  rendering them in Ink. Keep the raw core values unchanged.
 
 - **Explicit context scopes:** `core/contextEntries.ts` reads the machine
   (`HKLM\Software\Classes`) and user (`HKCU\Software\Classes`) roots, then
   merges same-name entries with user precedence. Keep the scope on every
-  listed entry and surface per-scope query warnings.
+  listed entry and surface per-scope query warnings. Read both the default
+  command and `DelegateExecute` from the standard verb `command` subkey.
 
 - **Exact-child removal:** Call `removeContextEntry` with target, scope, and
   entry name. It constructs the exact backing-hive child path through

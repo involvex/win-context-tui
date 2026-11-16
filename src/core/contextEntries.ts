@@ -1,18 +1,28 @@
-import { spawn } from "./spawn.ts";
+import { spawn, type RegResult } from "./spawn.ts";
 import {
   shellRootForTarget,
   type ContextTarget,
   type RegistryScope,
 } from "./targets.ts";
 
-export type ContextEntryHandlerKind = "command" | "delegate" | "metadata";
+export type ContextEntryHandlerKind =
+  "command" | "delegate" | "command+delegate" | "metadata";
+
+export type ContextEntryLabelData = {
+  defaultValue: string | null;
+  muiVerb: string | null;
+  source: "muiVerb" | "default" | "name";
+  isResourceReference: boolean;
+};
 
 export type ContextEntry = {
   name: string;
   label: string;
+  labelData: ContextEntryLabelData;
   scope: RegistryScope;
   registryPath: string;
   command: string | null;
+  delegateExecute: string | null;
   handlerKind: ContextEntryHandlerKind;
 };
 
@@ -32,11 +42,21 @@ export type ContextEntriesRunner = (
   root: string,
 ) => Promise<string>;
 
+/** Injectable process seam used to inspect the generated query command. */
+export type ContextEntriesProcessRunner = (
+  command: string,
+  args: string[],
+) => Promise<RegResult>;
+
 type RawContextEntry = {
   name?: unknown;
   default?: unknown;
   muiVerb?: unknown;
   command?: unknown;
+};
+
+type RawCommandData = {
+  default?: unknown;
   delegateExecute?: unknown;
 };
 
@@ -49,6 +69,27 @@ function nonEmptyString(value: unknown): string | null {
 
 function isRawContextEntry(value: unknown): value is RawContextEntry {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRawCommandData(value: unknown): value is RawCommandData {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseCommandData(value: unknown): {
+  command: string | null;
+  delegateExecute: string | null;
+} {
+  if (isRawCommandData(value)) {
+    return {
+      command: nonEmptyString(value.default),
+      delegateExecute: nonEmptyString(value.delegateExecute),
+    };
+  }
+
+  return {
+    command: nonEmptyString(value),
+    delegateExecute: null,
+  };
 }
 
 function parseEntriesValue(value: unknown): RawContextEntry[] {
@@ -91,22 +132,33 @@ export function parseContextEntries(
     }
 
     const name = raw.name;
-    const label =
-      nonEmptyString(raw.muiVerb) ?? nonEmptyString(raw.default) ?? name;
-    const command = nonEmptyString(raw.command);
-    const delegateExecute = nonEmptyString(raw.delegateExecute);
-    const handlerKind: ContextEntryHandlerKind = command
-      ? "command"
-      : delegateExecute
-        ? "delegate"
-        : "metadata";
+    const defaultValue = nonEmptyString(raw.default);
+    const muiVerb = nonEmptyString(raw.muiVerb);
+    const label = muiVerb ?? defaultValue ?? name;
+    const labelData: ContextEntryLabelData = {
+      defaultValue,
+      muiVerb,
+      source: muiVerb ? "muiVerb" : defaultValue ? "default" : "name",
+      isResourceReference: muiVerb?.startsWith("@") ?? false,
+    };
+    const { command, delegateExecute } = parseCommandData(raw.command);
+    const handlerKind: ContextEntryHandlerKind =
+      command && delegateExecute
+        ? "command+delegate"
+        : command
+          ? "command"
+          : delegateExecute
+            ? "delegate"
+            : "metadata";
 
     return {
       name,
       label,
+      labelData,
       scope,
       registryPath: `${root}\\${name}`,
       command,
+      delegateExecute,
       handlerKind,
     };
   });
@@ -186,19 +238,20 @@ function registryQueryScript(scope: RegistryScope, root: string): string {
     "      $key = $_",
     "      $default = $key.GetValue('')",
     "      $muiVerb = $key.GetValue('MUIVerb')",
-    "      $delegateExecute = $key.GetValue('DelegateExecute')",
     "      $command = $null",
     "      $commandPath = Join-Path -Path $key.PSPath -ChildPath 'command'",
     "      if (Test-Path -LiteralPath $commandPath) {",
     "        $commandKey = Get-Item -LiteralPath $commandPath -ErrorAction Stop",
-    "        $command = $commandKey.GetValue('')",
+    "        $command = [PSCustomObject]@{",
+    "          default = $commandKey.GetValue('')",
+    "          delegateExecute = $commandKey.GetValue('DelegateExecute')",
+    "        }",
     "      }",
     "      [PSCustomObject]@{",
     "        name = $key.PSChildName",
     "        default = $default",
     "        muiVerb = $muiVerb",
     "        command = $command",
-    "        delegateExecute = $delegateExecute",
     "      }",
     "    }",
     ")",
@@ -210,10 +263,11 @@ function registryQueryScript(scope: RegistryScope, root: string): string {
 export async function queryRegistryEntries(
   scope: RegistryScope,
   root: string,
+  runner: ContextEntriesProcessRunner = spawn,
 ): Promise<string> {
   const script = registryQueryScript(scope, root);
   const encodedScript = Buffer.from(script, "utf16le").toString("base64");
-  const result = await spawn("powershell.exe", [
+  const result = await runner("powershell.exe", [
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",

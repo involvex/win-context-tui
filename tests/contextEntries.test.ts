@@ -3,6 +3,7 @@ import {
   listContextEntries,
   mergeContextEntries,
   parseContextEntries,
+  queryRegistryEntries,
   type ContextEntriesRunner,
   type ContextEntry,
 } from "../src/core/contextEntries.ts";
@@ -20,8 +21,10 @@ describe("parseContextEntries", () => {
           name: "Öffnen mit Codex",
           default: "Öffnen mit Codex 🧪",
           muiVerb: null,
-          command: '"C:\\Tools\\codex.exe" "%1"',
-          delegateExecute: null,
+          command: {
+            default: '"C:\\Tools\\codex.exe" "%1"',
+            delegateExecute: null,
+          },
         },
       ]),
     );
@@ -30,9 +33,16 @@ describe("parseContextEntries", () => {
       {
         name: "Öffnen mit Codex",
         label: "Öffnen mit Codex 🧪",
+        labelData: {
+          defaultValue: "Öffnen mit Codex 🧪",
+          muiVerb: null,
+          source: "default",
+          isResourceReference: false,
+        },
         scope: "user",
         registryPath: "HKCU\\Software\\Classes\\*\\shell\\Öffnen mit Codex",
         command: '"C:\\Tools\\codex.exe" "%1"',
+        delegateExecute: null,
         handlerKind: "command",
       },
     ]);
@@ -43,45 +53,101 @@ describe("parseContextEntries", () => {
     expect(parseContextEntries("machine", machineRoot, "  \n")).toEqual([]);
   });
 
-  test("handles default, MUIVerb, command, delegate, and metadata-only variants", () => {
+  test("exposes delegate-only, command-plus-delegate, command-only, and metadata-only handlers", () => {
     const entries = parseContextEntries(
       "machine",
       machineRoot,
       JSON.stringify([
         {
-          name: "DefaultLabel",
-          default: "Default label",
+          name: "DelegateOnly",
+          default: "Delegate only",
           muiVerb: null,
-          command: "tool.exe",
-          delegateExecute: null,
+          command: {
+            default: null,
+            delegateExecute: "{shell.ext}",
+          },
         },
         {
-          name: "MuiLabel",
-          default: "Default label",
-          muiVerb: "MUI label",
-          command: null,
-          delegateExecute: "{shell.ext}",
+          name: "CommandAndDelegate",
+          default: "Command and delegate",
+          muiVerb: null,
+          command: {
+            default: "tool.exe",
+            delegateExecute: "{shell.ext}",
+          },
+        },
+        {
+          name: "CommandOnly",
+          default: "Command only",
+          muiVerb: null,
+          command: {
+            default: "tool.exe",
+            delegateExecute: null,
+          },
         },
         {
           name: "MetadataOnly",
-          default: null,
+          default: "Metadata only",
           muiVerb: null,
           command: null,
-          delegateExecute: null,
         },
       ]),
     );
 
-    expect(entries.map((entry) => entry.label)).toEqual([
-      "Default label",
-      "MUI label",
-      "MetadataOnly",
+    expect(
+      entries.map((entry) => ({
+        command: entry.command,
+        delegateExecute: entry.delegateExecute,
+        handlerKind: entry.handlerKind,
+      })),
+    ).toEqual([
+      {
+        command: null,
+        delegateExecute: "{shell.ext}",
+        handlerKind: "delegate",
+      },
+      {
+        command: "tool.exe",
+        delegateExecute: "{shell.ext}",
+        handlerKind: "command+delegate",
+      },
+      {
+        command: "tool.exe",
+        delegateExecute: null,
+        handlerKind: "command",
+      },
+      {
+        command: null,
+        delegateExecute: null,
+        handlerKind: "metadata",
+      },
     ]);
-    expect(entries.map((entry) => entry.handlerKind)).toEqual([
-      "command",
-      "delegate",
-      "metadata",
-    ]);
+  });
+
+  test("keeps indirect MUIVerb references distinguishable from default labels", () => {
+    const entries = parseContextEntries(
+      "user",
+      userRoot,
+      JSON.stringify([
+        {
+          name: "IndirectLabel",
+          default: "Fallback label",
+          muiVerb: "@%SystemRoot%\\system32\\shell32.dll,-100",
+          command: {
+            default: null,
+            delegateExecute: null,
+          },
+        },
+      ]),
+    );
+
+    expect(entries[0]?.label).toBe("@%SystemRoot%\\system32\\shell32.dll,-100");
+    expect(entries[0]?.labelData).toEqual({
+      defaultValue: "Fallback label",
+      muiVerb: "@%SystemRoot%\\system32\\shell32.dll,-100",
+      source: "muiVerb",
+      isResourceReference: true,
+    });
   });
 
   test("rejects malformed JSON", () => {
@@ -106,17 +172,31 @@ describe("mergeContextEntries", () => {
       {
         name: "Shared",
         label: "Machine shared",
+        labelData: {
+          defaultValue: "Machine shared",
+          muiVerb: null,
+          source: "default",
+          isResourceReference: false,
+        },
         scope: "machine",
         registryPath: "HKLM\\Software\\Classes\\*\\shell\\Shared",
         command: null,
+        delegateExecute: null,
         handlerKind: "metadata",
       },
       {
         name: "MachineOnly",
         label: "Machine only",
+        labelData: {
+          defaultValue: "Machine only",
+          muiVerb: null,
+          source: "default",
+          isResourceReference: false,
+        },
         scope: "machine",
         registryPath: "HKLM\\Software\\Classes\\*\\shell\\MachineOnly",
         command: null,
+        delegateExecute: null,
         handlerKind: "metadata",
       },
     ];
@@ -124,17 +204,31 @@ describe("mergeContextEntries", () => {
       {
         name: "Shared",
         label: "User shared",
+        labelData: {
+          defaultValue: "User shared",
+          muiVerb: null,
+          source: "default",
+          isResourceReference: false,
+        },
         scope: "user",
         registryPath: "HKCU\\Software\\Classes\\*\\shell\\Shared",
         command: "user-tool.exe",
+        delegateExecute: null,
         handlerKind: "command",
       },
       {
         name: "UserOnly",
         label: "User only",
+        labelData: {
+          defaultValue: "User only",
+          muiVerb: null,
+          source: "default",
+          isResourceReference: false,
+        },
         scope: "user",
         registryPath: "HKCU\\Software\\Classes\\*\\shell\\UserOnly",
         command: null,
+        delegateExecute: null,
         handlerKind: "metadata",
       },
     ];
@@ -150,17 +244,31 @@ describe("mergeContextEntries", () => {
     const machineEntry: ContextEntry = {
       name: "SharedVerb",
       label: "Machine shared",
+      labelData: {
+        defaultValue: "Machine shared",
+        muiVerb: null,
+        source: "default",
+        isResourceReference: false,
+      },
       scope: "machine",
       registryPath: "HKLM\\Software\\Classes\\*\\shell\\SharedVerb",
       command: null,
+      delegateExecute: null,
       handlerKind: "metadata",
     };
     const userEntry: ContextEntry = {
       name: "sharedverb",
       label: "User shared",
+      labelData: {
+        defaultValue: "User shared",
+        muiVerb: null,
+        source: "default",
+        isResourceReference: false,
+      },
       scope: "user",
       registryPath: "HKCU\\Software\\Classes\\*\\shell\\sharedverb",
       command: "user-tool.exe",
+      delegateExecute: null,
       handlerKind: "command",
     };
 
@@ -173,17 +281,31 @@ describe("mergeContextEntries", () => {
     const zuluEntry: ContextEntry = {
       name: "Zulu",
       label: "Same label",
+      labelData: {
+        defaultValue: "Same label",
+        muiVerb: null,
+        source: "default",
+        isResourceReference: false,
+      },
       scope: "machine",
       registryPath: "HKLM\\Software\\Classes\\*\\shell\\Zulu",
       command: null,
+      delegateExecute: null,
       handlerKind: "metadata",
     };
     const alphaEntry: ContextEntry = {
       name: "Alpha",
       label: "Same label",
+      labelData: {
+        defaultValue: "Same label",
+        muiVerb: null,
+        source: "default",
+        isResourceReference: false,
+      },
       scope: "user",
       registryPath: "HKCU\\Software\\Classes\\*\\shell\\Alpha",
       command: null,
+      delegateExecute: null,
       handlerKind: "metadata",
     };
 
@@ -191,6 +313,26 @@ describe("mergeContextEntries", () => {
       alphaEntry,
       zuluEntry,
     ]);
+  });
+});
+
+describe("queryRegistryEntries", () => {
+  test("reads DelegateExecute from the command subkey", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    await queryRegistryEntries("user", userRoot, async (command, args) => {
+      calls.push({ command, args });
+      return { ok: true, code: 0, stdout: "[]", stderr: "" };
+    });
+
+    expect(calls).toHaveLength(1);
+    const encodedScript = calls[0]?.args.at(-1);
+    expect(encodedScript).toBeDefined();
+    const script = Buffer.from(encodedScript as string, "base64").toString(
+      "utf16le",
+    );
+    expect(script).toContain("$commandKey.GetValue('DelegateExecute')");
+    expect(script).not.toContain("$key.GetValue('DelegateExecute')");
   });
 });
 

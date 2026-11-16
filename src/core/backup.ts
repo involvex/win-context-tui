@@ -20,6 +20,22 @@ export type BackupResult = {
   exportResult: RegResult | null;
 };
 
+/** A mutation failure that occurred after its backup was created successfully. */
+export class BackupMutationError extends Error {
+  readonly backupDir: string;
+  readonly meta: BackupMeta;
+
+  constructor(backupDir: string, meta: BackupMeta, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Registry mutation failed after backup creation: ${detail}`, {
+      cause,
+    });
+    this.name = "BackupMutationError";
+    this.backupDir = backupDir;
+    this.meta = meta;
+  }
+}
+
 /** Injectable seam for running `reg.exe` without touching the live registry. */
 export type RegistryCommandRunner = (args: string[]) => Promise<RegResult>;
 
@@ -134,7 +150,12 @@ export async function withBackup(
   options: BackupOptions = {},
 ): Promise<{ backupDir: string; result: RegResult; meta: BackupMeta }> {
   const backup = await createBackup(key, options);
-  const result = await mutate();
+  let result: RegResult;
+  try {
+    result = await mutate();
+  } catch (error) {
+    throw new BackupMutationError(backup.backupDir, backup.meta, error);
+  }
   return {
     backupDir: backup.backupDir,
     result,
