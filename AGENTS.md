@@ -14,6 +14,7 @@ npm/yarn/pnpm.
 | `bun install`   | Install dependencies                 | `bun install`   |
 | `bun run dev`   | Watch mode (restarts on file change) | `bun run dev`   |
 | `bun run start` | Run once (no build required)         | `bun run start` |
+| `bun test`      | Run automated tests                  | `bun test`      |
 
 | `bun run typecheck` | `tsc --noEmit` | `bun run typecheck` |
 | `bun run lint` | ESLint | `bun run lint` |
@@ -30,33 +31,50 @@ bun link
 win-context-tui
 ```
 
-Verify typecheck before committing:
+Verify before committing:
 
 ```powershell
+bun test
 bun run check
 ```
 
 ## Technologies
 
 - **Runtime:** Bun `>= 1.3.5` (`package.json` engines field)
-- **Language:** TypeScript `~5.8.3`, strict mode, `verbatimModuleSyntax`
-- **UI framework:** React `^19.2.7` rendered with Ink `^7.1.0` (terminal/CLI UI)
+- **Language:** TypeScript `6.0.3`, strict mode, `verbatimModuleSyntax`
+- **UI framework:** React `^19.2.7` rendered with Ink `^7.1.1` (terminal/CLI UI)
 
 - **Ink plugins:** `ink-select-input` `^6.2.0`, `ink-text-input` `^6.0.0`
-- **Tooling:** ESLint `^9.39.2` (flat config, `eslint.config.js`), Prettier `^3.7.4`
+- **Tooling:** ESLint `^9.39.2` (flat config, `eslint.config.js`), Prettier `^3.10.1`
 - **Type check:** `tsc --noEmit` (bundler module resolution, `jsx: react-jsx`)
-- **Platform:** Windows only; `reg.exe` for `HKEY_CLASSES_ROOT` writes (no native
-  bindings). Administrator privileges required for most HKCR writes.
+- **Testing:** Bun's built-in test runner; registry commands use injected fakes
+- **Platform:** Windows only; `reg.exe` for writes and the Windows PowerShell
+  Registry provider for read-only enumeration (no native bindings). Machine-scoped
+  removals and most HKCR writes require administrator privileges.
 - **Build:** `bun build --compile --minify ./src/index.tsx --outfile dist/win-context.exe`
 
 Project structure:
 
-```
+```text
 src/
   index.tsx    # Entrypoint, boots the Ink app
   app.tsx      # Main component, navigation state
-  ui/          # Ink components (Menu, Status, ShellNewScreen, ContextCmdScreen, theme)
-  core/        # registry.ts, backup.ts, elevation.ts, spawn.ts, targets.ts, paths.ts, presets.ts
+  ui/
+    ContextEntriesScreen.tsx  # List/remove static shell verbs
+    Menu.tsx                  # Home-menu actions
+    Status.tsx                # Shared result display
+    ShellNewScreen.tsx        # Add a ShellNew extension
+    ContextCmdScreen.tsx      # Add a context command
+    theme.ts                  # Dark/hacker color theme
+  core/
+    contextEntries.ts  # Scope-aware enumeration, parsing, and merge
+    registry.ts        # Registry mutations and removeContextEntry
+    backup.ts          # Pre-mutation reg export and metadata
+    elevation.ts       # Admin detection and UAC relaunch
+    spawn.ts           # reg.exe process wrapper
+    targets.ts         # Target and backing-scope registry paths
+    paths.ts           # Path and registry-key helpers
+    presets.ts         # Common application presets
 ```
 
 ## Best Practices
@@ -64,14 +82,26 @@ src/
 - **Type-first:** Run `bun run typecheck` after touching `src/`. `strict: true` and
   `noUncheckedIndexedAccess: true` are enabled; handle `undefined` indexing explicitly.
 - **Backup before mutation:** Every registry write goes through
-  `core/backup.ts` `withBackup(key, mutate)`. Keys are exported to
-  `%LOCALAPPDATA%\win-context-tui\backups\<timestamp>\` before any change. Never
-  write to `HKCR` without a backup.
+  `core/backup.ts` `withBackup(key, mutate)`. Existing keys are exported to
+  `%LOCALAPPDATA%\win-context-tui\backups\<uuid>\` before any change.
+  Context-entry removal uses `requireExisting` and aborts if the key is missing
+  or `reg export` fails. Never write without a backup.
 
-- **Elevation:** Most HKCR writes require admin. Detect with `net session`
-  (`core/elevation.ts` `isAdmin()`); relaunch via
-  `Start-Process -Verb RunAs` (`restartAsAdmin()`). Prefer the "Restart as
-  Administrator" menu option when not elevated.
+- **Explicit context scopes:** `core/contextEntries.ts` reads the machine
+  (`HKLM\Software\Classes`) and user (`HKCU\Software\Classes`) roots, then
+  merges same-name entries with user precedence. Keep the scope on every
+  listed entry and surface per-scope query warnings.
+
+- **Exact-child removal:** Call `removeContextEntry` with target, scope, and
+  entry name. It constructs the exact backing-hive child path through
+  `core/targets.ts` and rejects path-like names. Never delete through merged
+  `HKCR` or target a parent shell root.
+
+- **Elevation:** Detect elevation with `net session` (`core/elevation.ts`
+  `isAdmin()`); relaunch via `Start-Process -Verb RunAs`
+  (`restartAsAdmin()`). User-scoped removal does not require elevation;
+  machine-scoped removal requires a confirmed elevated session. Prefer the
+  "Restart as Administrator" menu option when needed.
 - **Registry targets:** Use `core/targets.ts` constants rather than hardcoding
   hives:
   - File selected → `HKCR\*\shell` (`"%1"`)
@@ -84,6 +114,8 @@ src/
   `result.ok` and surface `stderr`/`stdout` on failure. Use `/f` to force
   overwrites intentionally.
 
+- **Non-destructive tests:** Inject fake registry runners and temporary backup
+  roots. Automated tests must never perform a live registry deletion.
 - **Formatting:** Run `bun run format` before pushing; Prettier check is part of
   `bun run check`.
 - **Admin shell for installs:** `bun link` and HKCR writes need an elevated
@@ -93,9 +125,9 @@ src/
 
 - Prefer `bun` for Node.js tasks (installing, running scripts). Use `go` for Go
   modules and `task` for Taskfile.yml automation.
-- Before claiming work complete: run `bun run lint` and `bun run typecheck`;
-  only report success after verification passes.
-- Before committing/pushing: run local lint and typecheck, match CI commands,
+- Before claiming work complete: run `bun test`, `bun run lint`, and
+  `bun run typecheck`; only report success after verification passes.
+- Before committing/pushing: run local tests and checks, match CI commands,
   and do not bypass git hooks without explicit instruction.
 - Dark Mode is the default appearance; Hacker Theme (black background, green
   font) is the preferred color scheme unless the user requests otherwise.
