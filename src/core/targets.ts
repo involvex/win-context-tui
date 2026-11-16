@@ -12,6 +12,9 @@ import { sanitizeShellKeyName } from "./paths.ts";
  */
 export type ContextTarget = "file" | "directory" | "background";
 
+/** Backing registry hive for a static context-menu entry. */
+export type RegistryScope = "machine" | "user";
+
 export const CONTEXT_TARGETS: Array<{
   id: ContextTarget;
   label: string;
@@ -37,6 +40,59 @@ export const CONTEXT_TARGETS: Array<{
     defaultArg: '"%V"',
   },
 ];
+
+/** Explicit backing-store root for a context target and registry scope. */
+export function shellRootForTarget(
+  target: ContextTarget,
+  scope: RegistryScope,
+): string {
+  const hive = scope === "machine" ? "HKLM" : "HKCU";
+  const classesRoot = `${hive}\\Software\\Classes`;
+
+  switch (target) {
+    case "file":
+      return `${classesRoot}\\*\\shell`;
+    case "directory":
+      return `${classesRoot}\\Directory\\shell`;
+    case "background":
+      return `${classesRoot}\\Directory\\Background\\shell`;
+  }
+}
+
+const PATH_SEPARATOR = /[\\/]/;
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && codePoint <= 0x1f;
+  });
+}
+
+function validateBackingEntryName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Shell entry name is empty");
+  }
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error("Shell entry name must not be a path segment");
+  }
+  if (PATH_SEPARATOR.test(name) || hasControlCharacter(name)) {
+    throw new Error(
+      "Shell entry name contains a path separator or control character",
+    );
+  }
+  return name;
+}
+
+/** Exact backing-store key for one static context-menu entry. */
+export function backingShellKeyForTarget(
+  target: ContextTarget,
+  scope: RegistryScope,
+  name: string,
+): string {
+  const exactName = validateBackingEntryName(name);
+  return `${shellRootForTarget(target, scope)}\\${exactName}`;
+}
 
 export function shellKeyForTarget(target: ContextTarget, name: string): string {
   const safe = sanitizeShellKeyName(name);
