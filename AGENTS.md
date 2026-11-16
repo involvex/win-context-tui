@@ -1,8 +1,10 @@
 # AGENTS.md
 
 Windows context-menu enhancer TUI. Bun + TypeScript + React + Ink.
-Edits `HKEY_CLASSES_ROOT` via `reg.exe` (no native bindings). Backs up
-touched keys before every write.
+Add flows write through `HKEY_CLASSES_ROOT` (HKCR) via `reg.exe` (no native
+bindings). Listing and removal use explicit HKLM/HKCU backing paths. Add flows
+back up their primary target key; context-entry removal exports the exact child
+before deletion.
 
 ## Useful Commands
 
@@ -81,11 +83,19 @@ src/
 
 - **Type-first:** Run `bun run typecheck` after touching `src/`. `strict: true` and
   `noUncheckedIndexedAccess: true` are enabled; handle `undefined` indexing explicitly.
-- **Backup before mutation:** Every registry write goes through
-  `core/backup.ts` `withBackup(key, mutate)`. Existing keys are exported to
-  `%LOCALAPPDATA%\win-context-tui\backups\<uuid>\` before any change.
-  Context-entry removal uses `requireExisting` and aborts if the key is missing
-  or `reg export` fails. Never write without a backup.
+- **Backup before mutation:** Use `core/backup.ts` `withBackup(key, mutate)`.
+  Context-entry removal exports the exact child before deletion and uses
+  `requireExisting`; it aborts if the key is missing or `reg export` fails.
+  Add flows back up their primary target key only; separately touched companion
+  keys are not separately exported.
+- **Backup layouts:** An existing primary key produces `registry-entry.reg`
+  plus `meta.json`. A missing primary key produces `STUB.txt` plus `meta.json`
+  with no `.reg`. `meta.json.createdAt` is the backup creation timestamp.
+  Restore an existing-key backup with `reg import`; roll back a missing-key
+  backup by deleting the key recorded in `STUB.txt` and `meta.json`.
+- **Backup results:** Return the backup directory after a successful backup,
+  including when the later deletion fails. A backup failure itself has no
+  directory.
 
 - **Explicit context scopes:** `core/contextEntries.ts` reads the machine
   (`HKLM\Software\Classes`) and user (`HKCU\Software\Classes`) roots, then
@@ -103,10 +113,14 @@ src/
   machine-scoped removal requires a confirmed elevated session. Prefer the
   "Restart as Administrator" menu option when needed.
 - **Registry targets:** Use `core/targets.ts` constants rather than hardcoding
-  hives:
+  hives. Add flows use the HKCR roots:
   - File selected → `HKCR\*\shell` (`"%1"`)
   - Folder selected → `HKCR\Directory\shell` (`"%1"`)
   - Empty folder background → `HKCR\Directory\Background\shell` (`"%V"`)
+
+  Listing and removal use the explicit HKLM/HKCU backing paths from
+  `shellRootForTarget` and `backingShellKeyForTarget`; never delete through
+  merged HKCR.
 
 - **Imports:** Use `.ts` extensions in import paths (verbatim module syntax),
   e.g. `import { spawn } from "./spawn.ts";`.

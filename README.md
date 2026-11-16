@@ -4,7 +4,8 @@ Windows context-menu enhancer TUI. Bun + TypeScript + React + Ink.
 
 Adds classic static context-menu commands and can list or remove existing static
 shell verbs. Uses `reg.exe` and the Windows PowerShell Registry provider (no
-native bindings). Backs up the exact key before every write.
+native bindings). Before each add flow, it backs up the primary target key.
+Context-entry removal exports the exact child key before deletion.
 
 ## Requirements
 
@@ -65,7 +66,9 @@ win-context-tui
 
 Listing is read-only. A removal exports the selected child key before deleting
 it, then deletes only that child in the selected scope. A missing key or failed
-backup stops the removal.
+backup stops the removal. After a successful backup, the result includes the
+backup directory even when deletion subsequently fails. If backup creation
+itself fails, there is no backup directory to show.
 
 ### User and machine scope
 
@@ -109,7 +112,10 @@ cannot be removed through this TUI.
 
 ## Backups and restore
 
-Backups use UUID-named directories:
+Backups use UUID-named directories under
+`%LOCALAPPDATA%\win-context-tui\backups\`. There are two layouts.
+
+### Existing key
 
 ```text
 %LOCALAPPDATA%\win-context-tui\backups\<uuid>\
@@ -117,16 +123,44 @@ Backups use UUID-named directories:
   meta.json
 ```
 
-A context-entry removal requires the selected key to exist and its export to
-succeed, so `registry-entry.reg` and `meta.json` are written before deletion.
-`meta.json` records the exact key, creation time, and exported file. Add flows
-can also create `STUB.txt` when the key did not exist before the edit.
+Context-entry removal always uses this layout because the selected child must
+exist and is exported before deletion. An add flow also uses it when its
+primary target already exists.
 
-Restore a backup manually with `reg import`:
+Restore an existing-key backup with `reg import` in PowerShell:
 
-```bat
-reg import "%LOCALAPPDATA%\win-context-tui\backups\<uuid>\registry-entry.reg"
+```powershell
+$backup = Join-Path $env:LOCALAPPDATA "win-context-tui\backups\<uuid>"
+reg import (Join-Path $backup "registry-entry.reg")
 ```
+
+### Key absent at backup time
+
+```text
+%LOCALAPPDATA%\win-context-tui\backups\<uuid>\
+  STUB.txt
+  meta.json
+```
+
+This layout is used when the primary target did not exist, typically during an
+add flow. It has no `.reg` file. Roll it back by deleting the key recorded in
+`STUB.txt` and `meta.json`:
+
+```powershell
+$backup = Join-Path $env:LOCALAPPDATA "win-context-tui\backups\<uuid>"
+$meta = Get-Content (Join-Path $backup "meta.json") -Raw | ConvertFrom-Json
+reg delete $meta.key /f
+```
+
+`meta.json` records the exact key, whether it existed, the backup creation
+timestamp in `createdAt`, and the exported file when one exists.
+
+Add flows back up their primary target key: `HKCR\.ext` for ShellNew and
+`HKCR\...\shell\<name>` for a context command. Other keys separately touched
+by an add flow are not separately exported.
+
+The TUI shows the backup directory after a successful backup, including when
+the later write or deletion fails. A backup failure itself has no directory.
 
 Use an elevated shell to restore a machine-scoped key. The TUI does not
 provide an automatic restore action.
