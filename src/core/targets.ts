@@ -59,14 +59,37 @@ export function shellRootForTarget(
   }
 }
 
+const UNSAFE_BACKING_ENTRY_NAME = /[<>:"/\\|?*]/;
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && codePoint <= 0x1f;
+  });
+}
+
+function validateBackingEntryName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Shell entry name is empty");
+  }
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error("Shell entry name must not be a path segment");
+  }
+  if (UNSAFE_BACKING_ENTRY_NAME.test(name) || hasControlCharacter(name)) {
+    throw new Error("Shell entry name contains unsafe path characters");
+  }
+  return name;
+}
+
 /** Exact backing-store key for one static context-menu entry. */
 export function backingShellKeyForTarget(
   target: ContextTarget,
   scope: RegistryScope,
   name: string,
 ): string {
-  const safe = sanitizeShellKeyName(name);
-  return `${shellRootForTarget(target, scope)}\\${safe}`;
+  const exactName = validateBackingEntryName(name);
+  return `${shellRootForTarget(target, scope)}\\${exactName}`;
 }
 
 export function shellKeyForTarget(target: ContextTarget, name: string): string {

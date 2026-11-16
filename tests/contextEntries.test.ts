@@ -89,6 +89,15 @@ describe("parseContextEntries", () => {
       parseContextEntries("machine", machineRoot, "{broken"),
     ).toThrow("Invalid context-entry JSON");
   });
+
+  test.each(["[null]", "[[]]", "[42]"])(
+    "rejects malformed array shape %s",
+    (payload) => {
+      expect(() =>
+        parseContextEntries("machine", machineRoot, payload),
+      ).toThrow("Invalid context-entry JSON: entry must be an object");
+    },
+  );
 });
 
 describe("mergeContextEntries", () => {
@@ -136,9 +145,90 @@ describe("mergeContextEntries", () => {
       userEntries[0],
     ]);
   });
+
+  test("gives user scope precedence for same-name entries with different casing", () => {
+    const machineEntry: ContextEntry = {
+      name: "SharedVerb",
+      label: "Machine shared",
+      scope: "machine",
+      registryPath: "HKLM\\Software\\Classes\\*\\shell\\SharedVerb",
+      command: null,
+      handlerKind: "metadata",
+    };
+    const userEntry: ContextEntry = {
+      name: "sharedverb",
+      label: "User shared",
+      scope: "user",
+      registryPath: "HKCU\\Software\\Classes\\*\\shell\\sharedverb",
+      command: "user-tool.exe",
+      handlerKind: "command",
+    };
+
+    expect(mergeContextEntries([machineEntry], [userEntry])).toEqual([
+      userEntry,
+    ]);
+  });
+
+  test("orders entries with equal labels by entry name", () => {
+    const zuluEntry: ContextEntry = {
+      name: "Zulu",
+      label: "Same label",
+      scope: "machine",
+      registryPath: "HKLM\\Software\\Classes\\*\\shell\\Zulu",
+      command: null,
+      handlerKind: "metadata",
+    };
+    const alphaEntry: ContextEntry = {
+      name: "Alpha",
+      label: "Same label",
+      scope: "user",
+      registryPath: "HKCU\\Software\\Classes\\*\\shell\\Alpha",
+      command: null,
+      handlerKind: "metadata",
+    };
+
+    expect(mergeContextEntries([zuluEntry], [alphaEntry])).toEqual([
+      alphaEntry,
+      zuluEntry,
+    ]);
+  });
 });
 
 describe("listContextEntries", () => {
+  test("queries machine and user scopes concurrently", async () => {
+    let activeQueries = 0;
+    let maxActiveQueries = 0;
+    const runner: ContextEntriesRunner = async () => {
+      activeQueries += 1;
+      maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+      await Promise.resolve();
+      activeQueries -= 1;
+      return "[]";
+    };
+
+    const result = await listContextEntries("file", runner);
+
+    expect(maxActiveQueries).toBe(2);
+    expect(result).toEqual({ entries: [], warnings: [] });
+  });
+
+  test("assembles scope warnings in machine-then-user order", async () => {
+    const runner: ContextEntriesRunner = async (scope) => {
+      if (scope === "user") {
+        throw new Error("user scope failed");
+      }
+      await Promise.resolve();
+      throw new Error("machine scope failed");
+    };
+
+    const result = await listContextEntries("file", runner);
+
+    expect(result.warnings).toEqual([
+      { scope: "machine", message: "machine scope failed" },
+      { scope: "user", message: "user scope failed" },
+    ]);
+  });
+
   test("queries both explicit scopes and returns a deterministic merged list", async () => {
     const calls: Array<{ scope: string; root: string }> = [];
     const runner: ContextEntriesRunner = async (scope, root) => {

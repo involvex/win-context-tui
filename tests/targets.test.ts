@@ -60,3 +60,25 @@ describe("scope-aware shell registry paths", () => {
     },
   );
 });
+
+describe("strict backing entry names", () => {
+  test.each([
+    { description: "an empty name", name: "" },
+    { description: "a whitespace-only name", name: "   " },
+    { description: "a dot path segment", name: "." },
+    { description: "a dot-dot path segment", name: ".." },
+    { description: "a forward-slash separator", name: "folder/child" },
+    { description: "a backslash separator", name: "folder\\child" },
+    { description: "a drive-style colon", name: "C:child" },
+    { description: "a wildcard character", name: "Open*" },
+    { description: "a control character", name: "Open\u0000Name" },
+  ])("rejects $description", ({ name }) => {
+    expect(() => backingShellKeyForTarget("file", "machine", name)).toThrow();
+  });
+
+  test("preserves surrounding whitespace in a valid child name", () => {
+    expect(
+      backingShellKeyForTarget("file", "machine", "  Open in Codex  "),
+    ).toBe("HKLM\\Software\\Classes\\*\\shell\\  Open in Codex  ");
+  });
+});

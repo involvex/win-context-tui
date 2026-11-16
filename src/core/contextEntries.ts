@@ -47,12 +47,21 @@ function nonEmptyString(value: unknown): string | null {
   return value;
 }
 
+function isRawContextEntry(value: unknown): value is RawContextEntry {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function parseEntriesValue(value: unknown): RawContextEntry[] {
   if (Array.isArray(value)) {
-    return value as RawContextEntry[];
+    return value.map((entry) => {
+      if (!isRawContextEntry(entry)) {
+        throw new Error("Invalid context-entry JSON: entry must be an object");
+      }
+      return entry;
+    });
   }
-  if (value !== null && typeof value === "object") {
-    return [value as RawContextEntry];
+  if (isRawContextEntry(value)) {
+    return [value];
   }
   throw new Error("Invalid context-entry JSON: expected an object or array");
 }
@@ -224,30 +233,37 @@ export async function listContextEntries(
   target: ContextTarget,
   runner: ContextEntriesRunner = queryRegistryEntries,
 ): Promise<ListContextEntriesResult> {
-  const machineEntries: ContextEntry[] = [];
-  const userEntries: ContextEntry[] = [];
-  const warnings: ContextEntryWarning[] = [];
-
-  for (const scope of ["machine", "user"] as const) {
+  const queryScope = async (scope: RegistryScope) => {
     const root = shellRootForTarget(target, scope);
     try {
       const output = await runner(scope, root);
-      const entries = parseContextEntries(scope, root, output);
-      if (scope === "machine") {
-        machineEntries.push(...entries);
-      } else {
-        userEntries.push(...entries);
-      }
-    } catch (error) {
-      warnings.push({
+      return {
         scope,
-        message: error instanceof Error ? error.message : String(error),
-      });
+        entries: parseContextEntries(scope, root, output),
+        warning: null,
+      };
+    } catch (error) {
+      return {
+        scope,
+        entries: [] as ContextEntry[],
+        warning: {
+          scope,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
     }
-  }
+  };
+
+  const [machineResult, userResult] = await Promise.all([
+    queryScope("machine"),
+    queryScope("user"),
+  ]);
+  const warnings = [machineResult.warning, userResult.warning].filter(
+    (warning): warning is ContextEntryWarning => warning !== null,
+  );
 
   return {
-    entries: mergeContextEntries(machineEntries, userEntries),
+    entries: mergeContextEntries(machineResult.entries, userResult.entries),
     warnings,
   };
 }
