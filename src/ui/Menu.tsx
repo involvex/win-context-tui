@@ -2,7 +2,8 @@ import { Box, Text } from "ink";
 import SelectInput from "ink-select-input";
 import { theme } from "./theme.ts";
 
-export type MenuAction = "shellNew" | "contextCmd" | "restartAdmin" | "quit";
+export type MenuAction =
+  "shellNew" | "contextCmd" | "manageEntries" | "restartAdmin" | "quit";
 
 type MenuProps = {
   isAdmin: boolean | null;
@@ -15,6 +16,10 @@ export function Menu({ isAdmin, onSelect }: MenuProps) {
     {
       label: "Add app to context menu (file / folder / background)",
       value: "contextCmd",
+    },
+    {
+      label: "Manage context-menu entries (list / remove)",
+      value: "manageEntries",
     },
     ...(isAdmin === false
       ? [

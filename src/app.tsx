@@ -2,11 +2,12 @@ import { Box, Text, useApp, useInput, useStdin } from "ink";
 import { useEffect, useState } from "react";
 import { isAdmin, restartAsAdmin } from "./core/elevation.ts";
 import { ContextCmdScreen } from "./ui/ContextCmdScreen.tsx";
+import { ContextEntriesScreen } from "./ui/ContextEntriesScreen.tsx";
 import { Menu, type MenuAction } from "./ui/Menu.tsx";
 import { ShellNewScreen } from "./ui/ShellNewScreen.tsx";
 import { theme } from "./ui/theme.ts";
 
-type Screen = "home" | "shellNew" | "contextCmd";
+type Screen = "home" | "shellNew" | "contextCmd" | "manageEntries";
 
 function forceQuit() {
   // Ensure the process leaves raw mode and open handles on Windows/Bun
@@ -54,6 +55,10 @@ export function App() {
       setScreen("contextCmd");
       return;
     }
+    if (action === "manageEntries") {
+      setScreen("manageEntries");
+      return;
+    }
     if (action === "restartAdmin") {
       setStatusMsg("Requesting elevation (UAC)...");
       const result = await restartAsAdmin();
@@ -95,6 +100,12 @@ export function App() {
       ) : null}
       {screen === "contextCmd" ? (
         <ContextCmdScreen onBack={() => setScreen("home")} />
+      ) : null}
+      {screen === "manageEntries" ? (
+        <ContextEntriesScreen
+          isAdmin={admin}
+          onBack={() => setScreen("home")}
+        />
       ) : null}
     </Box>
   );
