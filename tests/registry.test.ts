@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   removeContextEntry,
   type RemoveContextEntryOptions,
 } from "../src/core/registry.ts";
-import { withBackup } from "../src/core/backup.ts";
+import { createBackup, withBackup } from "../src/core/backup.ts";
 import type { RegResult } from "../src/core/spawn.ts";
 
 type RegistryCommandRunner = (args: string[]) => Promise<RegResult>;
@@ -116,9 +116,97 @@ describe("backup safety options", () => {
           backupRoot: await createTemporaryRoot(),
         },
       ),
-    ).rejects.toThrow("key does not exist");
+    ).rejects.toThrow("required-key query failed");
     expect(mutated).toBe(false);
     expect(calls).toEqual([["query", key]]);
+  });
+
+  test("reports an access-denied required-key query with complete process details", async () => {
+    const runner: RegistryCommandRunner = async () => ({
+      ok: false,
+      code: 5,
+      stdout: "query stdout",
+      stderr: "Access is denied.",
+    });
+    const key = "HKLM\\Software\\Classes\\Directory\\shell\\Protected Entry";
+
+    const backup = withBackup(
+      key,
+      async () => ({ ok: true, code: 0, stdout: "", stderr: "" }),
+      {
+        requireExisting: true,
+        runner,
+        backupRoot: await createTemporaryRoot(),
+      },
+    );
+
+    await expect(backup).rejects.toThrow("required-key query failed");
+    await expect(backup).rejects.toThrow("exit code 5");
+    await expect(backup).rejects.toThrow("Access is denied.");
+    await expect(backup).rejects.toThrow("query stdout");
+  });
+});
+
+describe("backup artifacts", () => {
+  test("keeps the export path writable for a maximum-length entry name", async () => {
+    const entryName = "x".repeat(255);
+    const calls: string[][] = [];
+    const runner: RegistryCommandRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === "export") {
+        await writeFile(
+          args[2] as string,
+          "Windows Registry Editor Version 5.00",
+        );
+      }
+      return { ok: true, code: 0, stdout: "", stderr: "" };
+    };
+    const backupRoot = await createTemporaryRoot();
+
+    const outcome = await removeContextEntry(
+      { target: "directory", scope: "user", name: entryName },
+      { runner, backupRoot },
+    );
+    const exportCall = calls.find((args) => args[0] === "export");
+    const exportPath = exportCall?.[2];
+
+    expect(exportPath).toBeDefined();
+    expect(basename(exportPath as string)).toBe("registry-entry.reg");
+    expect(basename(exportPath as string).length).toBeLessThanOrEqual(255);
+    expect(outcome.meta.key).toBe(
+      `HKCU\\Software\\Classes\\Directory\\shell\\${entryName}`,
+    );
+    expect(outcome.meta.regFile).toBe(exportPath);
+  });
+
+  test("keeps concurrent sibling backups in distinct directories and exports", async () => {
+    const root = "HKCU\\Software\\Classes\\Directory\\shell";
+    const keys = [`${root}\\foo.bar`, `${root}\\foo_bar`];
+    const runner: RegistryCommandRunner = async (args) => {
+      if (args[0] === "export") {
+        await writeFile(args[2] as string, args[1] as string);
+      }
+      return { ok: true, code: 0, stdout: "", stderr: "" };
+    };
+    const backupRoot = await createTemporaryRoot();
+
+    setSystemTime(new Date("2026-11-16T12:00:00.000Z"));
+    let backups: Awaited<ReturnType<typeof createBackup>>[];
+    try {
+      backups = await Promise.all(
+        keys.map((key) => createBackup(key, { runner, backupRoot })),
+      );
+    } finally {
+      setSystemTime();
+    }
+    const [first, second] = backups;
+
+    expect(first?.backupDir).not.toBe(second?.backupDir);
+    expect(first?.meta.regFile).not.toBe(second?.meta.regFile);
+    expect(await readFile(first?.meta.regFile as string, "utf8")).toBe(keys[0]);
+    expect(await readFile(second?.meta.regFile as string, "utf8")).toBe(
+      keys[1],
+    );
   });
 });
 

@@ -2,6 +2,7 @@
  * Pre-mutation registry backups via `reg export`.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn, type RegResult } from "./spawn.ts";
@@ -34,9 +35,7 @@ export type BackupOptions = {
 const defaultRegistryRunner: RegistryCommandRunner = (args) =>
   spawn("reg", args);
 
-function timestampDirName(): string {
-  return new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-}
+const REGISTRY_EXPORT_FILE_NAME = "registry-entry.reg";
 
 function defaultBackupRoot(): string {
   const local =
@@ -46,24 +45,9 @@ function defaultBackupRoot(): string {
 }
 
 function processFailureDetails(result: RegResult): string {
-  const details = [result.stderr, result.stdout]
+  return [`exit code ${result.code}`, result.stderr, result.stdout]
     .filter((value) => value.trim().length > 0)
     .join("\n");
-  return details || `exit code ${result.code}`;
-}
-
-function backupFileName(key: string): string {
-  const invalidCharacters = '<>:"/\\|?*';
-  const safeName = Array.from(key, (character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || invalidCharacters.includes(character)
-      ? "_"
-      : character;
-  })
-    .join("")
-    .replaceAll(".", "_")
-    .replace(/[ .]+$/g, "");
-  return `${safeName || "registry"}.reg`;
 }
 
 async function queryKey(
@@ -83,7 +67,7 @@ export async function keyExists(
 }
 
 /**
- * Export `key` to a timestamped backup folder under LOCALAPPDATA.
+ * Export `key` to a unique backup folder under LOCALAPPDATA.
  * If the key is missing, records `existed: false` so restore can delete.
  */
 export async function createBackup(
@@ -92,18 +76,19 @@ export async function createBackup(
 ): Promise<BackupResult> {
   const runner = options.runner ?? defaultRegistryRunner;
   const root = options.backupRoot ?? defaultBackupRoot();
-  const backupDir = join(root, timestampDirName());
-  await mkdir(backupDir, { recursive: true });
+  const backupDir = join(root, randomUUID());
+  await mkdir(root, { recursive: true });
+  await mkdir(backupDir);
 
   const queryResult = await queryKey(key, runner);
   const existed = queryResult.ok;
   if (!existed && options.requireExisting) {
     throw new Error(
-      `Backup failed for ${key}: key does not exist\n${processFailureDetails(queryResult)}`,
+      `Backup failed for ${key}: required-key query failed\n${processFailureDetails(queryResult)}`,
     );
   }
 
-  const regPath = join(backupDir, backupFileName(key));
+  const regPath = join(backupDir, REGISTRY_EXPORT_FILE_NAME);
   let exportResult: RegResult | null = null;
   let regFile: string | null = null;
 
