@@ -19,20 +19,66 @@ export type BackupResult = {
   exportResult: RegResult | null;
 };
 
+/** Injectable seam for running `reg.exe` without touching the live registry. */
+export type RegistryCommandRunner = (args: string[]) => Promise<RegResult>;
+
+export type BackupOptions = {
+  /** Reject the mutation when the key does not exist. */
+  requireExisting?: boolean;
+  /** Injectable `reg.exe` command runner. */
+  runner?: RegistryCommandRunner;
+  /** Override the backup root, primarily for isolated tests. */
+  backupRoot?: string;
+};
+
+const defaultRegistryRunner: RegistryCommandRunner = (args) =>
+  spawn("reg", args);
+
 function timestampDirName(): string {
   return new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
 }
 
-function backupRoot(): string {
+function defaultBackupRoot(): string {
   const local =
     process.env.LOCALAPPDATA ??
     join(process.env.USERPROFILE ?? ".", "AppData", "Local");
   return join(local, "win-context-tui", "backups");
 }
 
+function processFailureDetails(result: RegResult): string {
+  const details = [result.stderr, result.stdout]
+    .filter((value) => value.trim().length > 0)
+    .join("\n");
+  return details || `exit code ${result.code}`;
+}
+
+function backupFileName(key: string): string {
+  const invalidCharacters = '<>:"/\\|?*';
+  const safeName = Array.from(key, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || invalidCharacters.includes(character)
+      ? "_"
+      : character;
+  })
+    .join("")
+    .replaceAll(".", "_")
+    .replace(/[ .]+$/g, "");
+  return `${safeName || "registry"}.reg`;
+}
+
+async function queryKey(
+  key: string,
+  runner: RegistryCommandRunner,
+): Promise<RegResult> {
+  return runner(["query", key]);
+}
+
 /** Probe whether a registry key exists (`reg query`). */
-export async function keyExists(key: string): Promise<boolean> {
-  const result = await spawn("reg", ["query", key]);
+export async function keyExists(
+  key: string,
+  runner: RegistryCommandRunner = defaultRegistryRunner,
+): Promise<boolean> {
+  const result = await queryKey(key, runner);
   return result.ok;
 }
 
@@ -40,23 +86,32 @@ export async function keyExists(key: string): Promise<boolean> {
  * Export `key` to a timestamped backup folder under LOCALAPPDATA.
  * If the key is missing, records `existed: false` so restore can delete.
  */
-export async function createBackup(key: string): Promise<BackupResult> {
-  const backupDir = join(backupRoot(), timestampDirName());
+export async function createBackup(
+  key: string,
+  options: BackupOptions = {},
+): Promise<BackupResult> {
+  const runner = options.runner ?? defaultRegistryRunner;
+  const root = options.backupRoot ?? defaultBackupRoot();
+  const backupDir = join(root, timestampDirName());
   await mkdir(backupDir, { recursive: true });
 
-  const existed = await keyExists(key);
-  const safeName = key.replaceAll("\\", "_").replaceAll(".", "_");
-  const regFileName = `${safeName}.reg`;
-  const regPath = join(backupDir, regFileName);
+  const queryResult = await queryKey(key, runner);
+  const existed = queryResult.ok;
+  if (!existed && options.requireExisting) {
+    throw new Error(
+      `Backup failed for ${key}: key does not exist\n${processFailureDetails(queryResult)}`,
+    );
+  }
 
+  const regPath = join(backupDir, backupFileName(key));
   let exportResult: RegResult | null = null;
   let regFile: string | null = null;
 
   if (existed) {
-    exportResult = await spawn("reg", ["export", key, regPath, "/y"]);
+    exportResult = await runner(["export", key, regPath, "/y"]);
     if (!exportResult.ok) {
       throw new Error(
-        `Backup failed for ${key}: ${exportResult.stderr || exportResult.stdout}`,
+        `Backup failed for ${key}: ${processFailureDetails(exportResult)}`,
       );
     }
     regFile = regPath;
@@ -91,8 +146,9 @@ export async function createBackup(key: string): Promise<BackupResult> {
 export async function withBackup(
   key: string,
   mutate: () => Promise<RegResult>,
+  options: BackupOptions = {},
 ): Promise<{ backupDir: string; result: RegResult; meta: BackupMeta }> {
-  const backup = await createBackup(key);
+  const backup = await createBackup(key, options);
   const result = await mutate();
   return {
     backupDir: backup.backupDir,

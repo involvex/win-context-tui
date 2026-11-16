@@ -3,7 +3,11 @@
  * Uses `reg.exe` via Bun.spawn — no native bindings.
  */
 
-import { withBackup, type BackupMeta } from "./backup.ts";
+import {
+  withBackup,
+  type BackupMeta,
+  type RegistryCommandRunner,
+} from "./backup.ts";
 import {
   extensionKey,
   friendlyTypeName,
@@ -14,9 +18,11 @@ import {
 } from "./paths.ts";
 import { spawn, type RegResult } from "./spawn.ts";
 import {
+  backingShellKeyForTarget,
   defaultArgForTarget,
   shellKeyForTarget,
   type ContextTarget,
+  type RegistryScope,
 } from "./targets.ts";
 
 export type { RegResult } from "./spawn.ts";
@@ -28,8 +34,37 @@ export type MutateOutcome = {
   meta: BackupMeta;
 };
 
+export type RemoveContextEntryOptions = {
+  target: ContextTarget;
+  scope: RegistryScope;
+  name: string;
+};
+
+export type RemoveContextEntryDependencies = {
+  runner?: RegistryCommandRunner;
+  backupRoot?: string;
+};
+
 export async function reg(args: string[]): Promise<RegResult> {
   return spawn("reg", args);
+}
+
+export async function removeContextEntry(
+  options: RemoveContextEntryOptions,
+  dependencies: RemoveContextEntryDependencies = {},
+): Promise<MutateOutcome> {
+  const key = backingShellKeyForTarget(
+    options.target,
+    options.scope,
+    options.name,
+  );
+  const runner = dependencies.runner ?? reg;
+
+  return withBackup(key, async () => runner(["delete", key, "/f"]), {
+    requireExisting: true,
+    runner,
+    backupRoot: dependencies.backupRoot,
+  });
 }
 
 async function ensureProgId(ext: string): Promise<RegResult> {
