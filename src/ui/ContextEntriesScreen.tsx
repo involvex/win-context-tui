@@ -15,7 +15,99 @@ import {
 import { Status } from "./Status.tsx";
 import { theme } from "./theme.ts";
 
-type Phase = "target" | "loading" | "list" | "confirm" | "result";
+export type ContextEntriesPhase =
+  "target" | "loading" | "list" | "confirm" | "result";
+
+type Phase = ContextEntriesPhase;
+
+export type ContextEntriesUiAction =
+  | { type: "escape" }
+  | { type: "cancel" }
+  | { type: "select-entry"; entry: ContextEntry }
+  | { type: "confirm" }
+  | { type: "return-home" };
+
+export type ContextEntriesTransition =
+  | { type: "return-home" }
+  | { type: "cancel-confirmation" }
+  | { type: "enter-confirmation"; entry: ContextEntry }
+  | { type: "confirm-removal" }
+  | { type: "none" };
+
+export type ContextEntriesKey = {
+  escape: boolean;
+  return: boolean;
+};
+
+export type ContextEntriesListView = {
+  entries: ContextEntry[];
+  warnings: ContextEntryWarning[];
+  isEmpty: boolean;
+};
+
+export function contextEntriesKeyAction(
+  phase: ContextEntriesPhase,
+  busy: boolean,
+  input: string,
+  key: ContextEntriesKey,
+): ContextEntriesUiAction | null {
+  if (busy) {
+    return null;
+  }
+  if (key.escape) {
+    return { type: "escape" };
+  }
+  if (phase === "confirm") {
+    if (key.return) {
+      return { type: "confirm" };
+    }
+    if (input.toLowerCase() === "n") {
+      return { type: "cancel" };
+    }
+  }
+  if (phase === "result" && key.return) {
+    return { type: "return-home" };
+  }
+  return null;
+}
+
+export function contextEntriesTransition(
+  phase: ContextEntriesPhase,
+  busy: boolean,
+  action: ContextEntriesUiAction,
+): ContextEntriesTransition {
+  if (busy) {
+    return { type: "none" };
+  }
+
+  switch (action.type) {
+    case "escape":
+      return phase === "confirm"
+        ? { type: "cancel-confirmation" }
+        : { type: "return-home" };
+    case "cancel":
+      return phase === "confirm"
+        ? { type: "cancel-confirmation" }
+        : { type: "none" };
+    case "select-entry":
+      return phase === "list"
+        ? { type: "enter-confirmation", entry: action.entry }
+        : { type: "none" };
+    case "confirm":
+      return phase === "confirm"
+        ? { type: "confirm-removal" }
+        : { type: "none" };
+    case "return-home":
+      return phase === "result" ? { type: "return-home" } : { type: "none" };
+  }
+}
+
+export function contextEntriesListView(
+  entries: ContextEntry[],
+  warnings: ContextEntryWarning[],
+): ContextEntriesListView {
+  return { entries, warnings, isEmpty: entries.length === 0 };
+}
 
 type ContextEntriesScreenProps = {
   isAdmin: boolean | null;
@@ -170,32 +262,34 @@ export function ContextEntriesScreen({
     }
   }
 
+  function applyTransition(transition: ContextEntriesTransition) {
+    switch (transition.type) {
+      case "return-home":
+        onBack();
+        return;
+      case "cancel-confirmation":
+        setSelected(null);
+        setPhase("list");
+        return;
+      case "enter-confirmation":
+        setSelected(transition.entry);
+        setPhase("confirm");
+        return;
+      case "confirm-removal":
+        void runRemoval();
+        return;
+      case "none":
+        return;
+    }
+  }
+
   useInput(
     (input, key) => {
-      if (key.escape) {
-        if (phase === "confirm") {
-          setSelected(null);
-          setPhase("list");
-        } else {
-          onBack();
-        }
+      const action = contextEntriesKeyAction(phase, busy, input, key);
+      if (!action) {
         return;
       }
-
-      if (phase === "confirm" && !busy) {
-        if (key.return) {
-          void runRemoval();
-          return;
-        }
-        if (input.toLowerCase() === "n") {
-          setSelected(null);
-          setPhase("list");
-        }
-      }
-
-      if (phase === "result" && key.return) {
-        onBack();
-      }
+      applyTransition(contextEntriesTransition(phase, busy, action));
     },
     { isActive: true },
   );
@@ -204,7 +298,7 @@ export function ContextEntriesScreen({
     return (
       <Box flexDirection="column">
         <Header target={target} />
-        <Status {...outcome} />
+        <Status {...outcome} escapeHint="Esc to return to menu" />
       </Box>
     );
   }
@@ -240,33 +334,38 @@ export function ContextEntriesScreen({
   }
 
   if (phase === "list") {
+    const listView = contextEntriesListView(entries, warnings);
     return (
       <Box flexDirection="column">
         <Header target={target} />
         <Text color={theme.text}>
-          {entries.length === 0
+          {listView.entries.length === 0
             ? "No context-menu entries found for this target."
-            : `Found ${entries.length} context-menu entr${entries.length === 1 ? "y" : "ies"}.`}
+            : `Found ${listView.entries.length} context-menu entr${listView.entries.length === 1 ? "y" : "ies"}.`}
         </Text>
-        {warnings.map((warning) => (
+        {listView.warnings.map((warning) => (
           <Text key={warning.scope} color={theme.warn}>
             Warning: {formatScopeLabel(warning.scope)} scope unavailable:{" "}
             {warning.message}
           </Text>
         ))}
-        {entries.length > 0 ? (
+        {listView.entries.length > 0 ? (
           <Box marginTop={1}>
             <SelectInput
-              items={contextEntrySelectItems(entries)}
+              items={contextEntrySelectItems(listView.entries)}
               onSelect={(item) => {
-                setSelected(item.value);
-                setPhase("confirm");
+                applyTransition(
+                  contextEntriesTransition(phase, busy, {
+                    type: "select-entry",
+                    entry: item.value,
+                  }),
+                );
               }}
             />
           </Box>
         ) : null}
         <Text color={theme.muted}>
-          {entries.length > 0
+          {listView.entries.length > 0
             ? "Up/Down navigate - Enter select - Esc back"
             : "Esc back"}
         </Text>

@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import type { ContextEntry } from "../src/core/contextEntries.ts";
 import {
+  contextEntriesKeyAction,
   contextEntrySelectItems,
+  contextEntriesListView,
+  contextEntriesTransition,
   evaluateRemovalElevation,
   formatCommandOrHandler,
   formatScopeLabel,
 } from "../src/ui/ContextEntriesScreen.tsx";
+import { resolveStatusEscapeHint } from "../src/ui/Status.tsx";
+
+const machineEntry: ContextEntry = {
+  name: "Shared",
+  label: "Machine shared",
+  scope: "machine",
+  registryPath: "HKLM\\Software\\Classes\\*\\shell\\Shared",
+  command: null,
+  handlerKind: "metadata",
+};
 
 describe("formatScopeLabel", () => {
   test("labels user and machine scopes explicitly", () => {
@@ -77,14 +90,6 @@ describe("contextEntrySelectItems", () => {
       command: "user-tool.exe",
       handlerKind: "command",
     };
-    const machineEntry: ContextEntry = {
-      name: "Shared",
-      label: "Machine shared",
-      scope: "machine",
-      registryPath: "HKLM\\Software\\Classes\\*\\shell\\Shared",
-      command: null,
-      handlerKind: "metadata",
-    };
 
     const items = contextEntrySelectItems([userEntry, machineEntry]);
 
@@ -95,5 +100,109 @@ describe("contextEntrySelectItems", () => {
     expect(new Set(items.map((item) => item.key)).size).toBe(2);
     expect(items[0]?.label).toContain("[User]");
     expect(items[1]?.label).toContain("[Machine]");
+  });
+});
+
+describe("contextEntriesKeyAction and contextEntriesTransition", () => {
+  test.each(["target", "loading", "list"] as const)(
+    "Escape returns home from the %s phase",
+    (phase) => {
+      expect(
+        contextEntriesKeyAction(phase, false, "", {
+          escape: true,
+          return: false,
+        }),
+      ).toEqual({ type: "escape" });
+      expect(
+        contextEntriesTransition(phase, false, { type: "escape" }),
+      ).toEqual({ type: "return-home" });
+    },
+  );
+
+  test("list selection enters confirmation", () => {
+    expect(
+      contextEntriesTransition("list", false, {
+        type: "select-entry",
+        entry: machineEntry,
+      }),
+    ).toEqual({ type: "enter-confirmation", entry: machineEntry });
+  });
+
+  test("confirmation cancel returns to the list", () => {
+    expect(
+      contextEntriesKeyAction("confirm", false, "n", {
+        escape: false,
+        return: false,
+      }),
+    ).toEqual({ type: "cancel" });
+    expect(
+      contextEntriesTransition("confirm", false, { type: "cancel" }),
+    ).toEqual({ type: "cancel-confirmation" });
+    expect(
+      contextEntriesTransition("confirm", false, { type: "escape" }),
+    ).toEqual({ type: "cancel-confirmation" });
+  });
+
+  test("result Enter and Escape return home", () => {
+    expect(
+      contextEntriesKeyAction("result", false, "", {
+        escape: false,
+        return: true,
+      }),
+    ).toEqual({ type: "return-home" });
+    expect(
+      contextEntriesKeyAction("result", false, "", {
+        escape: true,
+        return: false,
+      }),
+    ).toEqual({ type: "escape" });
+    expect(
+      contextEntriesTransition("result", false, { type: "return-home" }),
+    ).toEqual({ type: "return-home" });
+    expect(
+      contextEntriesTransition("result", false, { type: "escape" }),
+    ).toEqual({ type: "return-home" });
+  });
+
+  test("busy confirmation ignores Escape and all navigation", () => {
+    expect(
+      contextEntriesKeyAction("confirm", true, "", {
+        escape: true,
+        return: false,
+      }),
+    ).toBeNull();
+    expect(
+      contextEntriesTransition("confirm", true, { type: "escape" }),
+    ).toEqual({ type: "none" });
+    expect(
+      contextEntriesTransition("confirm", true, { type: "cancel" }),
+    ).toEqual({ type: "none" });
+    expect(
+      contextEntriesTransition("confirm", true, { type: "return-home" }),
+    ).toEqual({ type: "none" });
+  });
+});
+
+describe("contextEntriesListView", () => {
+  test("keeps empty and warning state data representable", () => {
+    const warning = {
+      scope: "user" as const,
+      message: "user scope query failed",
+    };
+
+    expect(contextEntriesListView([], [warning])).toEqual({
+      entries: [],
+      warnings: [warning],
+      isEmpty: true,
+    });
+  });
+});
+
+describe("resolveStatusEscapeHint", () => {
+  test("preserves the existing default and accepts a custom hint", () => {
+    expect(resolveStatusEscapeHint()).toBe("Esc to quit");
+    expect(resolveStatusEscapeHint("Esc to return to menu")).toBe(
+      "Esc to return to menu",
+    );
   });
 });
